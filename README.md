@@ -51,20 +51,27 @@ Verify it's installed by starting a new Claude Code session — you should see `
 
 ### Step 3: Configure Per-Project
 
-In each git repo where you want to use the skill, create a config file at `.claude/rfc-config.json`:
+In any git repo where you want to use the skill, initialize it with your Apps Script URL:
 
-```bash
-mkdir -p .claude
-cat > .claude/rfc-config.json << 'EOF'
-{
-  "appsScriptUrl": "YOUR_APPS_SCRIPT_WEB_APP_URL",
-  "apiKey": "YOUR_API_KEY_IF_SET",
-  "postCommitReminder": false
-}
-EOF
+```
+/publish-rfc init https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec
 ```
 
-Replace `YOUR_APPS_SCRIPT_WEB_APP_URL` with the URL from Step 1, and `YOUR_API_KEY_IF_SET` with the API key you chose (or remove the `apiKey` field if you didn't set one).
+If you set an API key in Step 1, include it:
+
+```
+/publish-rfc init https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec --key YOUR_API_KEY
+```
+
+This creates `.claude/rfc-config.json` in the project root with your settings. You can also create this file manually:
+
+```json
+{
+  "appsScriptUrl": "https://script.google.com/macros/s/.../exec",
+  "apiKey": "your-api-key-if-set",
+  "postCommitReminder": false
+}
+```
 
 You may want to add `.claude/rfc-state.json` to your `.gitignore` (the state file tracks which branches have docs and is local to each developer).
 
@@ -111,6 +118,8 @@ When enabled, after each commit Claude will check if the RFC is behind HEAD and 
 | Command | What It Does |
 |---------|-------------|
 | `/publish-rfc` | Generate/update the RFC for the current branch |
+| `/publish-rfc init <url>` | Initialize project config with your Apps Script URL |
+| `/publish-rfc init <url> --key <key>` | Initialize with URL and API key |
 | `/publish-rfc <google-doc-url>` | Link an existing Google Doc to the current branch |
 | "update the RFC doc" | Natural language trigger (same as `/publish-rfc`) |
 | "enable RFC reminders" | Turn on post-commit reminders for this project |

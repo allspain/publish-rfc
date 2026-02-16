@@ -22,13 +22,32 @@ Before first use, the user must:
 }
 ```
 
-If `rfc-config.json` doesn't exist or is missing `appsScriptUrl`, tell the user they need to set it up first and link them to the deployment guide.
+If `rfc-config.json` doesn't exist or is missing `appsScriptUrl`, suggest running `/publish-rfc init <apps-script-url>` to set it up.
 
 ## Invocation Modes
 
 ### 1. `/publish-rfc` — Generate/update RFC for current branch
 
-### 2. `/publish-rfc <google-doc-url>` — Link existing doc to current branch
+### 2. `/publish-rfc init <apps-script-url>` — Initialize project config
+
+If the argument starts with `https://script.google.com/`:
+1. Find the project root: `git rev-parse --show-toplevel`
+2. Create `.claude/` directory if it doesn't exist
+3. Create or update `.claude/rfc-config.json` with:
+   ```json
+   {
+     "appsScriptUrl": "<the-provided-url>",
+     "postCommitReminder": false
+   }
+   ```
+4. If the file already exists, preserve existing fields (like `apiKey`) and only update `appsScriptUrl`.
+5. Confirm to the user: "Initialized publish-rfc for this project. You can now run `/publish-rfc` to generate an RFC."
+
+Optionally, the user can provide an API key inline:
+- `/publish-rfc init <apps-script-url> --key <api-key>`
+- If `--key` is provided, also set `"apiKey": "<api-key>"` in the config.
+
+### 3. `/publish-rfc <google-doc-url>` — Link existing doc to current branch
 
 If the argument is a Google Docs URL:
 1. Extract the docId from the URL (the segment between `/d/` and `/edit` or next `/`)
@@ -38,7 +57,7 @@ If the argument is a Google Docs URL:
 5. Confirm to the user: "Linked [branch] to [url]. Next `/publish-rfc` will update this doc."
 6. Do NOT generate or push content — just link it.
 
-### 3. "enable/disable RFC reminders" — Toggle postCommitReminder
+### 4. "enable/disable RFC reminders" — Toggle postCommitReminder
 
 Update `postCommitReminder` in `.claude/rfc-config.json`.
 
