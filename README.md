@@ -21,7 +21,7 @@ If you just want RFC markdown files without Google Docs publishing:
 **1. Install the skill:**
 ```bash
 mkdir -p ~/.claude/skills/publish-rfc
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/publish-rfc/main/skill/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/allspain/publish-rfc/master/skill/SKILL.md \
   -o ~/.claude/skills/publish-rfc/SKILL.md
 ```
 
@@ -59,7 +59,7 @@ For automatic Google Docs publishing, you need the `gcloud` CLI authenticated wi
 **2. Install the skill:**
 ```bash
 mkdir -p ~/.claude/skills/publish-rfc
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/publish-rfc/main/skill/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/allspain/publish-rfc/master/skill/SKILL.md \
   -o ~/.claude/skills/publish-rfc/SKILL.md
 ```
 

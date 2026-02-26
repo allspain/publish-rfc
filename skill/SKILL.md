@@ -13,7 +13,7 @@ Generate an RFC document from the current branch's code changes and planning art
 Install the skill file:
 ```bash
 mkdir -p ~/.claude/skills/publish-rfc
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/publish-rfc/main/skill/SKILL.md \
+curl -fsSL https://raw.githubusercontent.com/allspain/publish-rfc/master/skill/SKILL.md \
   -o ~/.claude/skills/publish-rfc/SKILL.md
 ```
 
