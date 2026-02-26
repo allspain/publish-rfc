@@ -1,12 +1,12 @@
 ---
 name: publish-rfc
-description: Use when publishing or updating an RFC document to Google Docs from the current branch's code changes and planning docs. Also use when linking an existing Google Doc to the current branch, enabling/disabling post-commit RFC reminders, or when user says "update the RFC doc."
+description: Use when publishing or updating an RFC document to Google Docs, as a GitHub PR comment, or as a local markdown file. Also use when linking an existing Google Doc to the current branch, enabling/disabling post-commit RFC reminders, or when user says "update the RFC doc."
 user_invocable: true
 ---
 
 # publish-rfc
 
-Generate an RFC document from the current branch's code changes and planning artifacts, then publish or update it in Google Docs — or save it as a local markdown file.
+Generate an RFC document from the current branch's code changes and planning artifacts, then publish or update it in Google Docs, as a GitHub PR comment, or as a local markdown file.
 
 ## Prerequisites
 
@@ -21,9 +21,28 @@ Then run `/publish-rfc init` in any project to complete setup.
 
 **For Google Docs publishing** (optional — the skill works in markdown-only mode without this):
 - `gcloud` CLI installed ([cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install))
-- Authenticated with a Google account that has access to Google Docs: `gcloud auth login`
+- Authenticated with a Google account that has access to Google Docs
 - Google Docs API and Google Drive API enabled on a GCP project linked to your account
 - A quota project set: `gcloud auth application-default set-quota-project <PROJECT_ID>`
+
+### Obtaining an access token
+
+The skill supports two gcloud credential methods. The `authMethod` field in `.claude/rfc-config.json` controls which is used:
+
+- `"gcloud-adc"` (recommended) — Application Default Credentials: `gcloud auth application-default print-access-token`
+- `"gcloud-user"` — User credentials: `gcloud auth print-access-token`
+
+**Resolution order** (used everywhere the skill needs a token):
+
+1. Read `authMethod` from `.claude/rfc-config.json`
+2. If `"gcloud-adc"`, run `gcloud auth application-default print-access-token 2>/dev/null`
+3. If `"gcloud-user"` (or `authMethod` is absent), run `gcloud auth print-access-token 2>/dev/null`
+4. If the chosen method fails, try the other method as a fallback
+5. If both fail, fall back to markdown-only and tell the user to re-authenticate
+
+**Why ADC is recommended:** `gcloud auth login` tokens often lack Drive/Docs API scopes unless `--enable-gdrive-access` is passed. Application Default Credentials (`gcloud auth application-default login`) are scoped more broadly and work reliably with the Drive API.
+
+When the skill instructions say "get an access token" or show `TOKEN=$(gcloud auth print-access-token)`, always use this resolution logic instead of the literal command.
 
 ## Invocation Modes
 
@@ -41,36 +60,74 @@ If not found, ask: "Do you want to set up in markdown-only mode instead? You can
 
 If the user chooses markdown-only, skip to Step D with `publishMode` set to `"markdown-only"`.
 
-**Step B: Check Google authentication**
+**Step B: Check Google authentication and determine auth method**
 
-Run `gcloud auth print-access-token 2>/dev/null`. If this fails, tell the user:
+Try both credential methods and pick the one that works with the Drive API. Test ADC first (recommended), then fall back to user credentials:
 
-> "Run this in your terminal to authenticate with Google:"
+```bash
+# Try ADC first
+ADC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+if [ -n "$ADC_TOKEN" ]; then
+  ADC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $ADC_TOKEN" \
+    "https://www.googleapis.com/drive/v3/about?fields=user")
+fi
+
+# Try user credentials
+USER_TOKEN=$(gcloud auth print-access-token 2>/dev/null)
+if [ -n "$USER_TOKEN" ]; then
+  USER_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $USER_TOKEN" \
+    "https://www.googleapis.com/drive/v3/about?fields=user")
+fi
+```
+
+**If ADC returns 200:** Set `authMethod` to `"gcloud-adc"` and proceed to Step D.
+
+**If only user credentials return 200:** Set `authMethod` to `"gcloud-user"` and proceed to Step D.
+
+**If neither returns 200 but tokens were obtained (401/403):**
+
+The tokens exist but lack Drive API access. Tell the user:
+
+> "Your gcloud credentials don't have Google Drive access. Run one of these to fix it:"
+>
+> **Option 1 (recommended):** Application Default Credentials
 > ```bash
-> gcloud auth login
+> gcloud auth application-default login
+> gcloud auth application-default set-quota-project <YOUR_GCP_PROJECT_ID>
 > ```
+>
+> **Option 2:** User credentials with Drive scope
+> ```bash
+> gcloud auth login --enable-gdrive-access
+> ```
+>
+> "Also ensure the **Google Drive API** and **Google Docs API** are enabled in your GCP project."
+>
 > "Then run `/publish-rfc init` again."
 
 Stop here — auth requires a browser interaction.
 
-**Step C: Verify API access**
+**If no tokens at all:** Tell the user:
 
-Test that the Google Drive API is accessible:
-```bash
-curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://www.googleapis.com/drive/v3/about?fields=user"
-```
-
-If this returns `403`, the user likely needs to enable the Drive API or set a quota project. Tell them:
-
-> "The Google Drive API returned 403. You may need to:"
-> 1. Enable the **Google Drive API** and **Google Docs API** in your GCP project
-> 2. Set a quota project: `gcloud auth application-default set-quota-project <PROJECT_ID>`
->
+> "No gcloud credentials found. Run this to authenticate:"
+> ```bash
+> gcloud auth application-default login
+> ```
 > "Then run `/publish-rfc init` again."
 
-If this returns `200`, proceed.
+Stop here.
+
+**Step C: Check GitHub CLI (for `github-pr` mode)**
+
+Verify that `gh` is installed and authenticated:
+
+```bash
+gh auth status 2>/dev/null
+```
+
+If `gh` is not found or not authenticated, note this — `github-pr` mode won't be available.
 
 **Step D: Initialize project config**
 
@@ -79,15 +136,15 @@ If this returns `200`, proceed.
 3. Create `.claude/rfc-config.json` if it doesn't exist:
    ```json
    {
-     "publishMode": "google-docs",
+     "authMethod": "gcloud-adc",
      "postCommitReminder": false
    }
    ```
-   Use `"markdown-only"` for `publishMode` if the user skipped gcloud setup.
-4. If `publishMode` is `"google-docs"`, ask the user for their GCP quota project ID and add it:
+   Set `authMethod` to whichever method succeeded in Step B (`"gcloud-adc"` or `"gcloud-user"`). Omit if gcloud is not set up.
+4. If gcloud auth succeeded, ask the user for their GCP quota project ID and add it:
    ```json
    {
-     "publishMode": "google-docs",
+     "authMethod": "gcloud-adc",
      "quotaProject": "<project-id>",
      "postCommitReminder": false
    }
@@ -112,20 +169,32 @@ Update `postCommitReminder` in `.claude/rfc-config.json`.
 
 When invoked without a URL argument:
 
-### Step 1: Read configuration
+### Step 1: Read configuration and choose publish destination
 
 Read `.claude/rfc-config.json` from the project root (the git repo root). If it doesn't exist, stop and tell the user to run `/publish-rfc init`.
 
-If `publishMode` is `"google-docs"`, verify gcloud auth still works:
-```bash
-gcloud auth print-access-token 2>/dev/null
-```
-If this fails, warn the user and fall back to markdown-only for this run:
-> "gcloud auth expired. Falling back to markdown-only. Run `gcloud auth login` to re-authenticate."
+**Prompt the user for where to publish.** Use the AskUserQuestion tool to ask:
 
-### Step 2: Check for existing doc
+> "Where should I publish the RFC?"
+
+Offer these options (only show options that are available based on tooling):
+
+- **Google Docs** — Publish to a Google Doc (only if gcloud auth works)
+- **PR Comment** — Post as a comment on the PR (only if `gh` is available and a PR exists for this branch)
+- **Markdown only** — Save to `.claude/rfc-output.md`
+
+For Google Docs: obtain an access token using the resolution logic from "Obtaining an access token" above (check `authMethod` in config, try primary method, fall back to the other). If both methods fail, remove this option from the prompt.
+
+For PR Comment: check if `gh auth status` succeeds and `gh pr view` finds a PR. If either fails, remove this option from the prompt.
+
+If only one option is available, skip the prompt and use it automatically.
+
+### Step 2: Check for existing doc/comment
 
 Read `.claude/rfc-state.json` from the project root. Check if the current branch has an entry. If yes, this is an UPDATE. If no, this is a CREATE.
+
+For Google Docs: look for `docId`/`docUrl` in the entry.
+For PR Comment: look for `commentId`/`prNumber` in the entry.
 
 ### Step 3: Gather source material
 
@@ -201,24 +270,6 @@ export interface RumSoftNavigationEntry {
 }
 ```
 
-### Key Files
-
-<List modified/added files. If a PR exists, link each file to its SPECIFIC diff in the PR.
-GitHub PR file diff URLs use the format:
-  PR_URL/files#diff-<sha256-of-filepath>
-To compute the hash for each file path, run:
-  echo -n "path/to/file.ts" | shasum -a 256 | cut -d' ' -f1
-Then construct the link as: PR_URL/files#diff-<that-hash>
-Code references within the description should be in backticks.>
-
-- **[`path/to/file.ts`](PR_URL/files#diff-HASH)** — Description mentioning `relevantFunction()`
-- **[`path/to/other.ts`](PR_URL/files#diff-HASH)** — Description
-
-<If no PR exists, fall back to bold without links:>
-
-- **`path/to/file.ts`** — Description mentioning `relevantFunction()`
-- **`path/to/other.ts`** — Description
-
 ## Alternatives Considered
 
 <Only include if planning docs contain alternatives. Otherwise omit this section entirely.>
@@ -229,16 +280,16 @@ Code references within the description should be in backticks.>
 
 ## Implementation Phases
 
-<Derive from: GSD phases, superpowers plans, or diff analysis (in that priority order).
-Mark completed phases based on what code exists on the branch.
-IMPORTANT: Rewrite phase names into plain, human-readable descriptions. Strip any
-tooling-specific identifiers (phase numbers like "Phase 72", requirement IDs like
-"TYPE-01", agent names, skill references). A reader who has never used Claude, GSD,
-or superpowers should understand every line.>
+<ONLY include this section if Status is "Draft" or "In Progress". OMIT entirely for "Complete" RFCs.
 
-- [x] <Plain description of what was built, e.g. "Add soft navigation detection listener">
-- [x] <Another completed phase>
-- [ ] <Upcoming work, e.g. "Wire detection results into view telemetry">
+Derive from the commit history on the branch (`git log --oneline main..HEAD`). Each commit
+becomes a phase entry. Use the commit message as the phase description — rewrite into plain,
+human-readable language if needed. Mark commits that exist on the branch as completed.
+If there is planned work not yet committed, add unchecked entries for upcoming steps.>
+
+- [x] <Description derived from commit, e.g. "Add soft navigation detection listener">
+- [x] <Another committed change>
+- [ ] <Upcoming work not yet committed>
 
 ## Open Questions
 
@@ -257,14 +308,13 @@ or superpowers should understand every line.>
 - Summary, Motivation, Solution sections are ALWAYS generated.
 - Alternatives Considered: only if planning docs contain them.
 - Open Questions, Future Work, References: best-effort from available artifacts.
-- Implementation Phases: derive from GSD phases, superpowers plans, or diff analysis — but rewrite into plain human-readable descriptions. Strip all tooling jargon (phase numbers, requirement IDs, agent names). Do NOT include a "Requirements Traceability" section.
+- Implementation Phases: ONLY include when Status is "Draft" or "In Progress" — OMIT entirely for "Complete" RFCs. When included, derive from the commit history on the branch (`git log --oneline main..HEAD`), not from planning artifacts. Each commit becomes a phase entry.
 - Do NOT use markdown tables (`| col | col |`). They render poorly in Google Docs. Use bold labels with bullet lists instead.
 - Be thorough but concise. Match the tone of a senior engineer writing for other senior engineers.
 - Wrap URLs, URL paths, file paths, function names, variable names, type names, field names, CLI commands, and any code references in backticks (`` ` ``). For example: `https://example.com/api/v1`, `/src/utils/helper.ts`, `handleClick()`, `is_active`, `RumViewEvent`.
 - Each header metadata field (Status, Branch, Last updated, PR) MUST be on its own line, separated by blank lines so they render as separate paragraphs — not one run-on line.
 - PR links MUST use markdown link syntax: `[PR #123](https://github.com/...)` — not a raw URL.
 - Always put a blank line before and after fenced code blocks (```). Without blank lines, code blocks merge visually with surrounding text in Google Docs.
-- In the Key Files section, file paths in backticks must be visually distinct from the description. Use an em-dash ` — ` (not a hyphen) to separate the path from the description.
 
 ### Step 4b: Verify accuracy before publishing
 
@@ -282,7 +332,6 @@ This step is CRITICAL. The generated RFC must be factually accurate. Before proc
 
 **Architecture section:**
 - Verify that described data flows match the actual code. If the RFC says "component A calls B", confirm A actually calls B in the diff.
-- Verify file paths and function names are correct.
 
 **If any claim cannot be verified from the code, either:**
 1. Remove it
@@ -295,13 +344,60 @@ Do NOT proceed to publishing until verification is complete.
 
 **Always: Save the markdown file**
 
-Write the generated RFC markdown to `<project-root>/.claude/rfc-output.md`.
+Write the generated RFC markdown to `<project-root>/.claude/rfc-output.md`. This file is a local working file, not committed by default. Ensure it is excluded from git by adding `.claude/rfc-output.md` to `.git/info/exclude` (the local-only gitignore that is never committed) if not already present.
 
 Print: "Saved RFC markdown to `.claude/rfc-output.md`"
 
-**If `publishMode` is `"markdown-only"` or gcloud auth is unavailable, stop here.** The markdown file is the deliverable. Skip to Step 7.
+**If user chose "Markdown only", stop here.** The markdown file is the deliverable. Skip to Step 7.
 
-**If `publishMode` is `"google-docs"`: Publish via Google Drive API**
+**If user chose "PR Comment": Publish as a PR comment**
+
+This mode posts the RFC markdown directly as a comment on the branch's PR. GitHub renders the markdown natively.
+
+Find the PR for the current branch:
+
+```bash
+PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+```
+
+Prepend a marker comment to the body so subsequent updates can find and replace it:
+
+```
+<!-- rfc-publish: <branch-name> -->
+```
+
+**For CREATE (no existing comment):**
+
+Check `rfc-state.json` for a `commentId` for this branch. If none exists:
+
+```bash
+gh pr comment $PR_NUMBER --body-file /tmp/rfc-pr-comment.md
+```
+
+(Write the marker + RFC markdown to `/tmp/rfc-pr-comment.md` first.)
+
+After creating the comment, retrieve the comment ID:
+
+```bash
+COMMENT_ID=$(gh api repos/<owner>/<repo>/issues/$PR_NUMBER/comments \
+  --jq '[.[] | select(.body | test("rfc-publish: <branch-name>")) | .id] | last')
+```
+
+**For UPDATE (existing comment):**
+
+If `rfc-state.json` has a `commentId` for this branch, update the existing comment:
+
+```bash
+gh api repos/<owner>/<repo>/issues/comments/$COMMENT_ID \
+  -X PATCH \
+  -f body=@/tmp/rfc-pr-comment.md
+```
+
+If the update returns a 404 (comment was deleted), fall back to CREATE.
+
+If the API returns an error, print the error and tell the user: "PR comment publishing failed. The RFC markdown is still available at `.claude/rfc-output.md`."
+
+**If user chose "Google Docs": Publish via Google Drive API**
 
 Convert the RFC markdown to an HTML document with inline styles for Google Docs compatibility. Use these styles:
 
@@ -320,15 +416,18 @@ Write the HTML to `/tmp/rfc-publish.html`.
 
 Read the `quotaProject` from `.claude/rfc-config.json`. Build the quota project header: `-H "x-goog-user-project: <quotaProject>"`. If no `quotaProject` is set, omit this header.
 
+**Document title:** Extract the RFC title from the `# RFC: <Title>` heading in the generated markdown. Use this as the Google Doc document name (the `name` field in Drive API metadata). For example, if the heading is `# RFC: Remove FID Tracking`, the document name should be `RFC: Remove FID Tracking`.
+
 **For CREATE (no existing doc):**
 
+Obtain a token using the "Obtaining an access token" resolution logic above, then:
+
 ```bash
-TOKEN=$(gcloud auth print-access-token)
 curl -s -X POST \
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-goog-user-project: <quotaProject>" \
-  -F "metadata={\"name\":\"RFC: <Title>\",\"mimeType\":\"application/vnd.google-apps.document\"};type=application/json;charset=UTF-8" \
+  -F "metadata={\"name\":\"<extracted-title>\",\"mimeType\":\"application/vnd.google-apps.document\"};type=application/json;charset=UTF-8" \
   -F "file=@/tmp/rfc-publish.html;type=text/html"
 ```
 
@@ -336,8 +435,9 @@ Parse the JSON response to extract `id` (the docId) and `webViewLink` (the doc U
 
 **For UPDATE (existing doc):**
 
+Obtain a token using the "Obtaining an access token" resolution logic above. First, update the document content:
+
 ```bash
-TOKEN=$(gcloud auth print-access-token)
 curl -s -X PATCH \
   "https://www.googleapis.com/upload/drive/v3/files/<docId>?uploadType=media&fields=id,webViewLink" \
   -H "Authorization: Bearer $TOKEN" \
@@ -346,13 +446,26 @@ curl -s -X PATCH \
   --data-binary @/tmp/rfc-publish.html
 ```
 
+Then update the document title (in case the RFC title changed):
+
+```bash
+curl -s -X PATCH \
+  "https://www.googleapis.com/drive/v3/files/<docId>?fields=name" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: <quotaProject>" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"<extracted-title>\"}"
+```
+
 If the API returns an error, print the error and tell the user: "Google Docs publishing failed. The RFC markdown is still available at `.claude/rfc-output.md`."
 
 ### Step 6: Update local state
 
-Only update state if Google Docs publishing succeeded (skip for markdown-only mode).
+Only update state if publishing succeeded (skip for markdown-only mode).
 
-Update `.claude/rfc-state.json` with the document info:
+Update `.claude/rfc-state.json` with the document info.
+
+**For Google Docs:**
 
 ```json
 {
@@ -367,6 +480,21 @@ Update `.claude/rfc-state.json` with the document info:
 
 For CREATE, use the `id` and `webViewLink` from the API response. For UPDATE, preserve the existing URL and update `lastSyncCommit`.
 
+**For PR Comment:**
+
+```json
+{
+  "<branch-name>": {
+    "commentId": "<comment-id>",
+    "prNumber": <pr-number>,
+    "lastSyncCommit": "<current-HEAD-sha>",
+    "repo": "<repo-name>"
+  }
+}
+```
+
+For CREATE, store the comment ID retrieved after posting. For UPDATE, preserve the existing comment ID and update `lastSyncCommit`.
+
 If the file already has entries for other branches, preserve them.
 
 ### Step 7: Report to user
@@ -374,6 +502,8 @@ If the file already has entries for other branches, preserve them.
 Print:
 - For Google Docs CREATE: "Published RFC: <doc-url>"
 - For Google Docs UPDATE: "Updated RFC: <doc-url> (synced to <short-sha>)"
+- For PR Comment CREATE: "Published RFC as PR comment: <comment-url>"
+- For PR Comment UPDATE: "Updated RFC PR comment: <comment-url> (synced to <short-sha>)"
 - For markdown-only: "RFC saved to `.claude/rfc-output.md`"
 
 ## Post-Commit Reminder (Opt-In)
@@ -389,7 +519,8 @@ This check is passive — it only reminds, never auto-publishes.
 ## Error Handling
 
 - If config is missing, tell the user to run `/publish-rfc init`.
-- If `gcloud auth print-access-token` fails, fall back to markdown-only and suggest: `gcloud auth login`
+- If both auth methods fail (ADC and user credentials), fall back to markdown-only and suggest: `gcloud auth application-default login` (for ADC) or `gcloud auth login --enable-gdrive-access` (for user credentials).
+- If the Drive API returns `401`, the token lacks required scopes. Try the other auth method. If both fail, suggest re-authenticating with `gcloud auth application-default login`.
 - If the Drive API returns `403`, check if the quota project is set. Suggest: `gcloud auth application-default set-quota-project <PROJECT_ID>` and verify that the Google Drive API and Google Docs API are enabled in the GCP project.
 - If the Drive API returns `404` on UPDATE, the doc may have been deleted. Tell the user and offer to create a new one.
 - If git commands fail (e.g., no `main` branch), explain what happened and ask the user for the correct base branch.
