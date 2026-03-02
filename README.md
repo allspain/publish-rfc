@@ -1,6 +1,6 @@
 # publish-rfc
 
-A Claude Code skill that generates RFC documents from your branch's code changes and planning artifacts. Publish to Google Docs, as a GitHub PR comment, or save as a local markdown file.
+A Claude Code skill that generates RFC documents from your branch's code changes and planning artifacts. Publish to Google Docs, as a GitHub PR description, as a GitHub PR comment, or save as a local markdown file.
 
 ## How It Works
 
@@ -8,7 +8,7 @@ A Claude Code skill that generates RFC documents from your branch's code changes
 2. Claude analyzes your branch diff, commit history, and any planning docs (GSD, superpowers, etc.)
 3. Claude generates a structured RFC document (Summary, Motivation, Solution, Schema, etc.)
 4. Claude verifies every claim against the actual source code before publishing
-5. Claude asks where to publish: **Google Docs**, **PR comment**, or **markdown only**
+5. Claude asks where to publish: **Google Docs**, **PR description**, **PR comment**, or **markdown only**
 6. The RFC is saved as markdown locally and published to your chosen destination
 
 Two developers on the same branch can share the same Google Doc by linking it with `/publish-rfc <doc-url>`.
@@ -96,13 +96,16 @@ On subsequent runs, the same doc is updated in place.
 
 ---
 
-### Option C: Publish as a PR Comment
+### Option C: Publish to a GitHub PR
 
-If you have the [GitHub CLI](https://cli.github.com/) (`gh`) installed and a PR open for your branch, you can publish the RFC as a comment on the PR.
+If you have the [GitHub CLI](https://cli.github.com/) (`gh`) installed and a PR open for your branch, you can publish the RFC directly to the PR. Two modes are available:
 
-No additional setup is needed beyond `gh auth login`. When you run `/publish-rfc`, choose **PR Comment** from the publish prompt.
+- **PR Description** (recommended) — Replaces the PR body with the RFC. Reviewers see it immediately as the first thing they read.
+- **PR Comment** — Posts the RFC as a separate comment on the PR.
 
-The comment includes a hidden marker (`<!-- rfc-publish: branch-name -->`) so subsequent runs update the same comment instead of creating duplicates.
+No additional setup is needed beyond `gh auth login`. When you run `/publish-rfc`, choose your preferred mode from the publish prompt.
+
+Both modes include a hidden marker (`<!-- rfc-publish: branch-name -->`) so subsequent runs update in place instead of creating duplicates.
 
 ## Usage
 
@@ -120,6 +123,7 @@ Each time you run `/publish-rfc`, Claude prompts you to choose where to publish 
 | Destination | Requires | Behavior |
 |-------------|----------|----------|
 | **Google Docs** | `gcloud` CLI with ADC | Creates/updates a Google Doc with the RFC title |
+| **PR Description** | `gh` CLI + open PR | Replaces the PR body with the RFC (recommended) |
 | **PR Comment** | `gh` CLI + open PR | Posts/updates a comment on the branch's PR |
 | **Markdown only** | Nothing | Saves to `.claude/rfc-output.md` |
 
@@ -246,10 +250,11 @@ The skill tries `main`, then `master`, then detects the default branch from the 
 
 ## Architecture
 
-The skill uses three publishing modes:
+The skill uses four publishing modes:
 
 - **Markdown-only**: Generates RFC markdown and saves to `.claude/rfc-output.md`. No external dependencies.
 - **Google Docs**: Converts RFC to HTML with inline styles, then uploads via the Google Drive API using `gcloud` credentials. New docs are created via multipart upload; existing docs are updated via media upload. The document title is set from the RFC heading. The Drive API handles HTML-to-Google-Docs format conversion automatically.
+- **PR Description**: Replaces the PR body with the RFC markdown using `gh pr edit`. A hidden HTML marker enables idempotent updates. This is the recommended mode when a PR exists — reviewers see the RFC as the first thing they read.
 - **PR Comment**: Posts the RFC markdown as a comment on the branch's PR using the `gh` CLI. A hidden HTML marker enables idempotent updates to the same comment.
 
 See [docs/plans/2026-02-16-publish-rfc-design.md](docs/plans/2026-02-16-publish-rfc-design.md) for the original design document.
