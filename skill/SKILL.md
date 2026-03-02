@@ -1,12 +1,12 @@
 ---
 name: publish-rfc
-description: Use when publishing or updating an RFC document to Google Docs, as a GitHub PR comment, or as a local markdown file. Also use when linking an existing Google Doc to the current branch, enabling/disabling post-commit RFC reminders, or when user says "update the RFC doc."
+description: Use when publishing or updating an RFC document to Google Docs, as a GitHub PR description, as a GitHub PR comment, or as a local markdown file. Also use when linking an existing Google Doc to the current branch, enabling/disabling post-commit RFC reminders, or when user says "update the RFC doc."
 user_invocable: true
 ---
 
 # publish-rfc
 
-Generate an RFC document from the current branch's code changes and planning artifacts, then publish or update it in Google Docs, as a GitHub PR comment, or as a local markdown file.
+Generate an RFC document from the current branch's code changes and planning artifacts, then publish or update it in Google Docs, as a GitHub PR description, as a GitHub PR comment, or as a local markdown file.
 
 ## Prerequisites
 
@@ -180,21 +180,23 @@ Read `.claude/rfc-config.json` from the project root (the git repo root). If it 
 Offer these options (only show options that are available based on tooling):
 
 - **Google Docs** — Publish to a Google Doc (only if gcloud auth works)
-- **PR Comment** — Post as a comment on the PR (only if `gh` is available and a PR exists for this branch)
+- **PR Description** — Replace the PR body with the RFC content (only if `gh` is available and a PR exists for this branch). This is recommended when a PR exists — reviewers see the RFC immediately as the first thing they read.
+- **PR Comment** — Post as a separate comment on the PR (only if `gh` is available and a PR exists for this branch)
 - **Markdown only** — Save to `.claude/rfc-output.md`
 
 For Google Docs: obtain an access token using the resolution logic from "Obtaining an access token" above (check `authMethod` in config, try primary method, fall back to the other). If both methods fail, remove this option from the prompt.
 
-For PR Comment: check if `gh auth status` succeeds and `gh pr view` finds a PR. If either fails, remove this option from the prompt.
+For PR Description / PR Comment: check if `gh auth status` succeeds and `gh pr view` finds a PR. If either fails, remove both PR options from the prompt.
 
 If only one option is available, skip the prompt and use it automatically.
 
-### Step 2: Check for existing doc/comment
+### Step 2: Check for existing state
 
 Read `.claude/rfc-state.json` from the project root. Check if the current branch has an entry. If yes, this is an UPDATE. If no, this is a CREATE.
 
 For Google Docs: look for `docId`/`docUrl` in the entry.
-For PR Comment: look for `commentId`/`prNumber` in the entry.
+For PR Description: look for `publishMode: "pr-description"` and `prNumber` in the entry.
+For PR Comment: look for `commentId`/`prNumber` in the entry (or `publishMode: "pr-comment"`).
 
 ### Step 3: Gather source material
 
@@ -249,7 +251,10 @@ messages — but VERIFY every claim against the actual code (see Verification Ru
 
 ### Architecture
 
-<Component breakdown, data flow. Derive from actual code changes.>
+<Keep this concise — 1-2 paragraphs describing the high-level data flow or
+component interaction. Avoid exhaustive file-by-file breakdowns. Only go deep
+on areas that are non-obvious or require reviewer attention. Derive from actual
+code changes.>
 
 ### Schema
 
@@ -276,7 +281,11 @@ export interface RumSoftNavigationEntry {
 
 ## Testing
 
-<What test coverage exists. Derive from test files in the diff.>
+<Describe how a reviewer should verify the change works. Focus on which specific
+test suite or command is most relevant to this change and why, rather than listing
+every CI command and its pass/fail status. For example: "Run `yarn typecheck` to
+confirm the removed types don't leave dangling references" is more useful than
+"yarn typecheck — passes".>
 
 ## Implementation Phases
 
@@ -311,6 +320,7 @@ If there is planned work not yet committed, add unchecked entries for upcoming s
 - Implementation Phases: ONLY include when Status is "Draft" or "In Progress" — OMIT entirely for "Complete" RFCs. When included, derive from the commit history on the branch (`git log --oneline main..HEAD`), not from planning artifacts. Each commit becomes a phase entry.
 - Do NOT use markdown tables (`| col | col |`). They render poorly in Google Docs. Use bold labels with bullet lists instead.
 - Be thorough but concise. Match the tone of a senior engineer writing for other senior engineers.
+- Prefer prose paragraphs over bullet-point-per-file lists. Summarize groups of related changes together rather than enumerating every file individually.
 - Wrap URLs, URL paths, file paths, function names, variable names, type names, field names, CLI commands, and any code references in backticks (`` ` ``). For example: `https://example.com/api/v1`, `/src/utils/helper.ts`, `handleClick()`, `is_active`, `RumViewEvent`.
 - Each header metadata field (Status, Branch, Last updated, PR) MUST be on its own line, separated by blank lines so they render as separate paragraphs — not one run-on line.
 - PR links MUST use markdown link syntax: `[PR #123](https://github.com/...)` — not a raw URL.
@@ -349,6 +359,41 @@ Write the generated RFC markdown to `<project-root>/.claude/rfc-output.md`. This
 Print: "Saved RFC markdown to `.claude/rfc-output.md`"
 
 **If user chose "Markdown only", stop here.** The markdown file is the deliverable. Skip to Step 7.
+
+**If user chose "PR Description": Publish as the PR body**
+
+This mode replaces the PR body with the RFC markdown. This is the recommended approach when a PR exists — reviewers see the RFC immediately as the first thing they read, avoiding duplication between a PR description and a separate RFC comment.
+
+Find the PR for the current branch:
+
+```bash
+PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+PR_URL=$(gh pr view --json url -q '.url' 2>/dev/null)
+```
+
+Prepend a marker comment to the body so subsequent updates can identify it:
+
+```
+<!-- rfc-publish: <branch-name> -->
+```
+
+Write the marker + RFC markdown to `/tmp/rfc-pr-body.md`.
+
+**For CREATE (no existing state or PR body doesn't have RFC marker):**
+
+```bash
+gh pr edit $PR_NUMBER --body-file /tmp/rfc-pr-body.md
+```
+
+**For UPDATE (state exists with `publishMode: "pr-description"`):**
+
+Same command — `gh pr edit` always replaces the full body:
+
+```bash
+gh pr edit $PR_NUMBER --body-file /tmp/rfc-pr-body.md
+```
+
+If the API returns an error, print the error and tell the user: "PR description publishing failed. The RFC markdown is still available at `.claude/rfc-output.md`."
 
 **If user chose "PR Comment": Publish as a PR comment**
 
@@ -480,11 +525,27 @@ Update `.claude/rfc-state.json` with the document info.
 
 For CREATE, use the `id` and `webViewLink` from the API response. For UPDATE, preserve the existing URL and update `lastSyncCommit`.
 
+**For PR Description:**
+
+```json
+{
+  "<branch-name>": {
+    "publishMode": "pr-description",
+    "prNumber": <pr-number>,
+    "lastSyncCommit": "<current-HEAD-sha>",
+    "repo": "<repo-name>"
+  }
+}
+```
+
+For both CREATE and UPDATE, store/preserve the PR number and update `lastSyncCommit`.
+
 **For PR Comment:**
 
 ```json
 {
   "<branch-name>": {
+    "publishMode": "pr-comment",
     "commentId": "<comment-id>",
     "prNumber": <pr-number>,
     "lastSyncCommit": "<current-HEAD-sha>",
@@ -502,6 +563,8 @@ If the file already has entries for other branches, preserve them.
 Print:
 - For Google Docs CREATE: "Published RFC: <doc-url>"
 - For Google Docs UPDATE: "Updated RFC: <doc-url> (synced to <short-sha>)"
+- For PR Description CREATE: "Published RFC as PR description: <pr-url>"
+- For PR Description UPDATE: "Updated RFC in PR description: <pr-url> (synced to <short-sha>)"
 - For PR Comment CREATE: "Published RFC as PR comment: <comment-url>"
 - For PR Comment UPDATE: "Updated RFC PR comment: <comment-url> (synced to <short-sha>)"
 - For markdown-only: "RFC saved to `.claude/rfc-output.md`"
